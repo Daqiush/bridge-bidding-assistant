@@ -1,0 +1,5 @@
+dist/
+.wrangler/
+.sites-runtime/
+.openai/hosting.json
+
