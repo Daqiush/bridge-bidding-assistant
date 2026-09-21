@@ -54,6 +54,58 @@ function explain(system, sequence, bid) {
   }
   return `${SYSTEMS[system]}：${formatBid(bid)} 是序列 “${sequence.replaceAll("_", " ")}” 后的合法延续。请结合牌力、牌型与局况判断。`;
 }
+const json = (body, status = 200) => new Response(JSON.stringify(body), {
+  status,
+  headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+});
+const CALL = /^(?:P|X|XX|[1-7](?:C|D|H|S|N))$/;
+const SYSTEM = new Set(Object.keys(SYSTEMS));
+const DEALER = new Set(["N", "E", "S", "W"]);
+const VUL = new Set(["None", "NS", "EW", "All"]);
+function validExplainInput(value) {
+  if (!value || typeof value !== "object") return false;
+  if (typeof value.sequence !== "string" || value.sequence.length < 1 || value.sequence.length > 1024) return false;
+  const calls = value.sequence.toUpperCase().split("_");
+  return calls.every((call) => CALL.test(call)) && SYSTEM.has(value.system) &&
+    DEALER.has(value.dealer) && VUL.has(value.vul) && (value.teammode === 0 || value.teammode === 1);
+}
+async function handleExplain(request, env) {
+  let input;
+  try { input = await request.json(); } catch { return json({ status: "invalid", message: "请求格式不正确。" }, 400); }
+  if (!validExplainInput(input)) return json({ status: "invalid", message: "叫牌序列或设置不正确。" }, 400);
+  if (!env?.XINRUI_SESSION_ID || !env?.XINRUI_UID || !env?.XINRUI_VERSION) {
+    return json({ status: "unavailable", message: "说明服务暂时不可用，请稍后重试。" }, 503);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const base = String(env.XINRUI_BASE_URL || "https://www.xinruibridge.com").replace(/\/$/, "");
+    const upstream = await fetch(`${base}/bidcomment`, {
+      method: "POST",
+      headers: { "content-type": "application/json; charset=utf-8", "user-agent": "BridgeBiddingWeb/1.0" },
+      body: JSON.stringify({
+        bid: input.sequence.toUpperCase(),
+        bidsystem: `${input.system},${input.system}`,
+        dealer: input.dealer,
+        lang: 1,
+        sessionid: env.XINRUI_SESSION_ID,
+        teammode: input.teammode,
+        uid: Number(env.XINRUI_UID),
+        version: env.XINRUI_VERSION,
+        vul: input.vul,
+      }),
+      signal: controller.signal,
+    });
+    if (!upstream.ok) throw new Error("upstream status");
+    const data = await upstream.json();
+    if (data?.rcode === "0000" && typeof data.content === "string" && data.content.trim()) {
+      return json({ status: "found", explanation: data.content.trim(), isAlert: data.isalert === "Y", source: "upstream" });
+    }
+    return json({ status: "missing", message: "暂无该叫牌序列的说明。" }, 404);
+  } catch {
+    return json({ status: "unavailable", message: "说明服务暂时不可用，请稍后重试。" }, 503);
+  } finally { clearTimeout(timer); }
+}
 function html() {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>桥牌叫牌助手</title><style>
   :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17221b;background:#f4f7f2}*{box-sizing:border-box}body{margin:0}header{padding:28px max(20px,calc((100% - 1180px)/2));background:#173b2c;color:#f5fbf2;display:flex;justify-content:space-between;align-items:center}header h1{margin:0;font-size:28px}header p{margin:6px 0 0;color:#c8e2cc}.shell{max-width:1180px;margin:24px auto;padding:0 20px}.toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.toolbar label{font-size:13px;color:#55705c}.toolbar select,.toolbar button{border:1px solid #c3d4c4;border-radius:10px;background:white;padding:10px 12px;font:inherit}.toolbar button{cursor:pointer}.toolbar .primary{background:#1b6a43;color:white;border-color:#1b6a43}.layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:18px;margin-top:18px}.card{background:white;border:1px solid #dce7dc;border-radius:18px;box-shadow:0 8px 24px #173b2c0b;padding:18px}.meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.meta strong{font-size:18px}.sequence{min-height:118px;background:#f7faf6;border-radius:12px;padding:12px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.seat{text-align:center;color:#2f7c43;font-weight:700}.seat.vul{color:#bd3838}.bid{min-height:44px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:#f0f5ef;font-weight:650;border:1px solid #e1eae0}.bid.click{cursor:pointer}.bid.click:hover{background:#e2f1e5}.board{display:grid;grid-template-columns:40px repeat(5,1fr);gap:7px;margin-top:16px}.level{display:grid;place-items:center;color:#698071;font-weight:700}.bidbtn{cursor:pointer;border:1px solid #d1dfd1;background:#fff;border-radius:10px;padding:11px 5px;font-size:16px}.bidbtn:disabled{opacity:.3;cursor:not-allowed}.bidbtn.red{color:#c03939}.special{display:grid;grid-template-columns:2fr 1fr 1fr;gap:7px;margin-top:10px}.special button{padding:12px;border-radius:10px;border:1px solid #d1dfd1;background:#fff;cursor:pointer}.special button:disabled{opacity:.3;cursor:not-allowed}.history{display:flex;gap:7px;flex-wrap:wrap;margin-top:13px}.history button{border:0;border-radius:8px;background:#e8f2e8;padding:7px 9px;cursor:pointer}.explain{min-height:116px;line-height:1.65;color:#3a5140}.next{display:grid;gap:9px;max-height:560px;overflow:auto}.next button{text-align:left;border:1px solid #dce7dc;background:#fbfdfb;border-radius:12px;padding:11px;cursor:pointer}.next strong{display:inline-block;min-width:65px;color:#175d3c}.next small{color:#58705d}.warning{color:#a25c1c;background:#fff5e8;padding:10px;border-radius:10px}.done{color:#1b6a43;background:#e8f5ea;padding:10px;border-radius:10px}@media(max-width:800px){.layout{grid-template-columns:1fr}.next{max-height:none}}
@@ -63,9 +115,10 @@ function html() {
   const higher=(a,b)=>!b||+a[0]>+b[0]||(+a[0]===+b[0]&&suits.indexOf(a.slice(1))>suits.indexOf(b.slice(1))); const last=()=>[...bids].reverse().find(isSub);
   function legal(){const l=last(),o=[];for(let n=1;n<8;n++)for(const s of suits){const b=n+s;if(higher(b,l))o.push(b)}o.push('P');const i=l?bids.lastIndexOf(l):-1,after=bids.slice(i+1);if(l&&(bids.length-i)%2===1&&!after.some(x=>x==='X'||x==='XX'))o.push('X');if(l&&(bids.length-i)%2===0&&after.includes('X')&&!after.includes('XX'))o.push('XX');return o}
   const info=n=>({dealer:['N','E','S','W'][(n-1)%4],vul:vulCycle[(n-1)%16]}); const finished=()=>bids.length>=4&&((bids.length===4&&bids.every(x=>x==='P'))||(bids.slice(-3).every(x=>x==='P')&&bids.slice(0,-3).some(isSub)));
-  function explain(b,idx=bids.length){const seq=bids.slice(0,idx).join('_');if(b==='P')return 'PASS：当前没有更合适的叫品。';if(b==='X')return 'DOUBLE：对方最后一个实质叫品后，表示防守性加倍。';if(b==='XX')return 'REDOUBLE：己方叫品被加倍后进行再加倍。';if(idx===1)return systems[system]+'：'+fmt(b)+'，自然花色或均衡牌型的开叫候选。';return systems[system]+'：'+fmt(b)+' 是序列 “'+seq.replaceAll('_',' ')+'” 后的合法延续，请结合牌力、牌型与局况判断。'}
-  function render(){const i=info(board),l=legal();$('boardMeta').textContent='第 '+board+' 副 · '+i.dealer+' 发 · 局况 '+i.vul;$('status').innerHTML=finished()?'<span class="done">叫牌结束</span>':'';const seq=$('sequence');seq.innerHTML=['N','E','S','W'].map((s,k)=>'<div class="seat '+((i.vul==='All'||i.vul.includes(s==='N'||s==='S'?'NS':'EW'))?'vul':'')+'">'+s+'</div>').join('');const pad=['N','E','S','W'].indexOf(i.dealer);for(let x=0;x<pad;x++)seq.innerHTML+='<div></div>';bids.forEach((b,k)=>seq.innerHTML+='<div class="bid click" data-i="'+k+'">'+fmt(b)+'</div>');while(seq.children.length%4)seq.innerHTML+='<div></div>';seq.querySelectorAll('[data-i]').forEach(e=>e.onclick=()=>{$('explain').textContent=explain(bids[+e.dataset.i],+e.dataset.i+1)});let grid='<div></div>'+suits.map(s=>'<div class="level">'+(symbols[s]||s)+'</div>').join('');for(let n=1;n<8;n++){grid+='<div class="level">'+n+'</div>';for(const s of suits){const b=n+s;grid+='<button class="bidbtn '+(s==='H'||s==='D'?'red':'')+'" data-bid="'+b+'" '+(l.includes(b)?'':'disabled')+'>'+fmt(b)+'</button>'}}$('boardGrid').innerHTML=grid;$('special').innerHTML=['P','X','XX'].map(b=>'<button data-bid="'+b+'" '+(l.includes(b)?'':'disabled')+'>'+fmt(b)+'</button>').join('');document.querySelectorAll('[data-bid]').forEach(e=>e.onclick=()=>add(e.dataset.bid));$('nextList').innerHTML=l.slice(0,40).map(b=>'<button data-next="'+b+'"><strong>'+fmt(b)+'</strong><small>'+explain(b,bids.length+1)+'</small></button>').join('');document.querySelectorAll('[data-next]').forEach(e=>e.onclick=()=>{$('explain').textContent=explain(e.dataset.next,bids.length+1)});$('board').value=board}
-  function add(b){if(!legal().includes(b))return;bids.push(b);render();$('explain').textContent=explain(b,bids.length)}$('system').innerHTML=Object.entries(systems).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');$('system').value=system;$('system').onchange=e=>{system=e.target.value;bids=[];render()};$('undo').onclick=()=>{bids.pop();render()};$('clear').onclick=()=>{bids=[];render()};$('prev').onclick=()=>{board=Math.max(1,board-1);bids=[];render()};$('nextBoard').onclick=()=>{board++;bids=[];render()};$('board').onchange=e=>{board=Math.max(1,+e.target.value||1);bids=[];render()};$('copy').onclick=async()=>{await navigator.clipboard?.writeText(bids.join('_'));$('copy').textContent='已复制';setTimeout(()=>$('copy').textContent='复制叫牌序列',1200)};render();
+  function explain(b,idx=bids.length){const seq=bids.slice(0,idx).join('_');if(b==='P')return 'PASS：当前没有更合适的叫品。';if(b==='X')return 'DOUBLE：对方最后一个实质叫品后，表示防守性加倍。';if(b==='XX')return 'REDOUBLE：己方叫品被加倍后进行再加倍。';if(idx===1)return systems[system]+'：'+fmt(b)+'，点击查看真实规则说明。';return systems[system]+'：'+fmt(b)+' 是序列 “'+seq.replaceAll('_',' ')+'” 后的合法延续，点击查看真实规则说明。'}
+  async function loadExplain(sequence){const i=info(board);$('explain').textContent='正在查询真实规则…';try{const r=await fetch('/api/explain',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sequence,system,dealer:i.dealer,vul:i.vul,teammode:0})});const data=await r.json();$('explain').textContent=data.status==='found'?(data.explanation+(data.isAlert?' · ALERT':'')):(data.message||'暂无说明');}catch{$('explain').textContent='说明服务暂时不可用，请稍后重试。'}}
+  function render(){const i=info(board),l=legal();$('boardMeta').textContent='第 '+board+' 副 · '+i.dealer+' 发 · 局况 '+i.vul;$('status').innerHTML=finished()?'<span class="done">叫牌结束</span>':'';const seq=$('sequence');seq.innerHTML=['N','E','S','W'].map((s,k)=>'<div class="seat '+((i.vul==='All'||i.vul.includes(s==='N'||s==='S'?'NS':'EW'))?'vul':'')+'">'+s+'</div>').join('');const pad=['N','E','S','W'].indexOf(i.dealer);for(let x=0;x<pad;x++)seq.innerHTML+='<div></div>';bids.forEach((b,k)=>seq.innerHTML+='<div class="bid click" data-i="'+k+'">'+fmt(b)+'</div>');while(seq.children.length%4)seq.innerHTML+='<div></div>';seq.querySelectorAll('[data-i]').forEach(e=>e.onclick=()=>loadExplain(bids.slice(0,+e.dataset.i+1).join('_')));let grid='<div></div>'+suits.map(s=>'<div class="level">'+(symbols[s]||s)+'</div>').join('');for(let n=1;n<8;n++){grid+='<div class="level">'+n+'</div>';for(const s of suits){const b=n+s;grid+='<button class="bidbtn '+(s==='H'||s==='D'?'red':'')+'" data-bid="'+b+'" '+(l.includes(b)?'':'disabled')+'>'+fmt(b)+'</button>'}}$('boardGrid').innerHTML=grid;$('special').innerHTML=['P','X','XX'].map(b=>'<button data-bid="'+b+'" '+(l.includes(b)?'':'disabled')+'>'+fmt(b)+'</button>').join('');document.querySelectorAll('[data-bid]').forEach(e=>e.onclick=()=>add(e.dataset.bid));$('nextList').innerHTML=l.slice(0,40).map(b=>'<button data-next="'+b+'"><strong>'+fmt(b)+'</strong><small>'+explain(b,bids.length+1)+'</small></button>').join('');document.querySelectorAll('[data-next]').forEach(e=>e.onclick=()=>{const b=e.dataset.next;loadExplain((bids.length?bids.join('_')+'_':'')+b)});$('board').value=board}
+  function add(b){if(!legal().includes(b))return;bids.push(b);render();loadExplain(bids.join('_'))}$('system').innerHTML=Object.entries(systems).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');$('system').value=system;$('system').onchange=e=>{system=e.target.value;bids=[];render()};$('undo').onclick=()=>{bids.pop();render()};$('clear').onclick=()=>{bids=[];render()};$('prev').onclick=()=>{board=Math.max(1,board-1);bids=[];render()};$('nextBoard').onclick=()=>{board++;bids=[];render()};$('board').onchange=e=>{board=Math.max(1,+e.target.value||1);bids=[];render()};$('copy').onclick=async()=>{await navigator.clipboard?.writeText(bids.join('_'));$('copy').textContent='已复制';setTimeout(()=>$('copy').textContent='复制叫牌序列',1200)};render();
   </script></body></html>`;
 }
-export default { async fetch(request) { const url = new URL(request.url); if (url.pathname !== "/" && url.pathname !== "/index.html") return new Response("Not found", { status: 404 }); return new Response(html(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }); } };
+export default { async fetch(request, env) { const url = new URL(request.url); if (url.pathname === "/api/explain" && request.method === "POST") return handleExplain(request, env); if (url.pathname !== "/" && url.pathname !== "/index.html") return new Response("Not found", { status: 404 }); return new Response(html(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }); } };

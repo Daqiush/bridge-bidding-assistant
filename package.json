@@ -2,5 +2,5 @@
   "name": "bridge-bidding-assistant-site",
   "private": true,
   "type": "module",
-  "scripts": {"build": "bash scripts/build.sh", "validate": "node scripts/validate-artifact.mjs", "test": "node --test tests/board-cycle.test.mjs"}
+  "scripts": {"build": "bash scripts/build.sh", "validate": "node scripts/validate-artifact.mjs", "test": "node --test tests/board-cycle.test.mjs tests/explanation-api.test.mjs"}
 }
