@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-const source = await readFile("dist/server/index.js", "utf8");
-const manifest = await readFile("dist/.openai/hosting.json", "utf8");
+import { resolve, join } from "node:path";
+const root = resolve(process.argv[2] || "");
+if (!process.argv[2]) throw new Error("Artifact path is required");
+const source = await readFile(join(root, "server/index.js"), "utf8");
+const manifest = await readFile(join(root, ".openai/hosting.json"), "utf8");
 JSON.parse(manifest);
 const mod = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 assert.equal(typeof mod.default?.fetch, "function");
+assert.match(manifest, /"d1"\s*:\s*"DB"/);
+assert.match(manifest, /"r2"\s*:\s*"STAGING"/);
+assert.ok((await readFile(join(root, ".openai/drizzle/0000_dataset.sql"))).length > 0);
 console.log("Artifact is valid ESM and exports default.fetch");
