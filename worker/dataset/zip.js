@@ -3,6 +3,12 @@ const u16 = (b, o) => b[o] | (b[o + 1] << 8);
 const u32 = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
 const text = (b, o, n) => te.decode(b.slice(o, o + n));
 function safeName(name) { return name && name.length <= 256 && !name.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(name) && !name.split("/").includes(".."); }
+function isSystemTxt(name, system) {
+  const base = name.split("/").at(-1);
+  if (!base?.toLowerCase().endsWith(".txt")) return false;
+  const stem = base.slice(0, -4).toLowerCase();
+  return stem.split(/[^a-z0-9]+/).includes(system.toLowerCase());
+}
 async function inflate(raw) {
   const ds = new DecompressionStream("deflate-raw");
   const out = await new Response(new Blob([raw]).stream().pipeThrough(ds)).arrayBuffer();
@@ -24,7 +30,8 @@ export async function readSystemTxt(input, system) {
     const nlen = u16(bytes, p + 28), xlen = u16(bytes, p + 30), clen = u16(bytes, p + 32), name = text(bytes, p + 46, nlen);
     if (!safeName(name) || flags & 1 || ![0, 8].includes(method)) throw new Error("unsupported zip entry");
     const local = u32(bytes, p + 42); if (name.endsWith("/")) { p += 46 + nlen + xlen + clen; continue; }
-    if (name !== `${system}.txt` && !name.endsWith(`/${system}.txt`)) { p += 46 + nlen + xlen + clen; continue; }
+    if (!isSystemTxt(name, system)) { p += 46 + nlen + xlen + clen; continue; }
+    if (wanted) throw new Error("multiple system files");
     if (size > 16 * 1024 * 1024 || local + 30 > bytes.length || u32(bytes, local) !== 0x04034b50) throw new Error("invalid entry");
     const ln = u16(bytes, local + 26), lx = u16(bytes, local + 28), start = local + 30 + ln + lx;
     const raw = bytes.slice(start, start + comp); if (raw.length !== comp) throw new Error("truncated entry");
