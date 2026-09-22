@@ -24,7 +24,7 @@ export async function readSystemTxt(input, system) {
     const nlen = u16(bytes, p + 28), xlen = u16(bytes, p + 30), clen = u16(bytes, p + 32), name = text(bytes, p + 46, nlen);
     if (!safeName(name) || flags & 1 || ![0, 8].includes(method)) throw new Error("unsupported zip entry");
     const local = u32(bytes, p + 42); if (name.endsWith("/")) { p += 46 + nlen + xlen + clen; continue; }
-    if (name !== `${system}.txt`) throw new Error("unexpected zip entry");
+    if (name !== `${system}.txt` && !name.endsWith(`/${system}.txt`)) { p += 46 + nlen + xlen + clen; continue; }
     if (size > 16 * 1024 * 1024 || local + 30 > bytes.length || u32(bytes, local) !== 0x04034b50) throw new Error("invalid entry");
     const ln = u16(bytes, local + 26), lx = u16(bytes, local + 28), start = local + 30 + ln + lx;
     const raw = bytes.slice(start, start + comp); if (raw.length !== comp) throw new Error("truncated entry");
