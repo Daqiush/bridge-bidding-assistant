@@ -10,6 +10,15 @@ test('suggestions prefetch real explanations and commit the clicked bid', async 
   assert.doesNotMatch(html, /<small>'\+explain\(b,bids\.length\+1\)/);
 });
 
+test('prefetched explanations are reused for suggestion and history clicks', async () => {
+  const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
+  const html = await response.text();
+  assert.match(html, /const explanationCache=new Map\(\)/);
+  assert.match(html, /function rememberExplanation\(/);
+  assert.match(html, /const cached=explanationCache\.get\(/);
+  assert.match(html, /rememberExplanation\(context,items\[k\]\.sequence,result\)/);
+});
+
 test('page renders the required attribution and accessible alert badge', async () => {
   const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
   const html = await response.text();
