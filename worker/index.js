@@ -1,148 +1,77 @@
-const SUITS = ["C", "D", "H", "S", "N"];
-const SYSTEMS = {
-  JQA: "新睿精确",
-  CBB: "新睿二盖一",
-  NBS: "简易二盖一",
-  ASY: "黄卡",
-};
-const VUL_CYCLE = [
-  "None", "NS", "EW", "All",
-  "NS", "EW", "All", "None",
-  "EW", "All", "None", "NS",
-  "All", "None", "NS", "EW",
-];
-const suitSymbol = { C: "♣", D: "♦", H: "♥", S: "♠", N: "NT" };
-const formatBid = (b) => b === "P" ? "PASS" : b === "X" || b === "XX" ? b : b[0] + (suitSymbol[b.slice(1)] || b.slice(1));
-const substantive = (b) => b && !["P", "X", "XX"].includes(b);
-function higher(a, b) {
-  if (!b) return true;
-  const la = Number(a[0]), lb = Number(b[0]);
-  return la > lb || (la === lb && SUITS.indexOf(a.slice(1)) > SUITS.indexOf(b.slice(1)));
-}
-function lastSubstantive(bids) { return [...bids].reverse().find(substantive); }
-function legalBids(bids) {
-  const last = lastSubstantive(bids);
-  const out = [];
-  for (let level = 1; level <= 7; level++) for (const suit of SUITS) {
-    const bid = `${level}${suit}`;
-    if (higher(bid, last)) out.push(bid);
-  }
-  out.push("P");
-  const idx = last ? bids.lastIndexOf(last) : -1;
-  const after = bids.slice(idx + 1);
-  if (last && (bids.length - idx) % 2 === 1 && !after.some((b) => b === "X" || b === "XX")) out.push("X");
-  if (last && (bids.length - idx) % 2 === 0 && after.includes("X") && !after.includes("XX")) out.push("XX");
-  return out;
-}
-function finished(bids) {
-  if (bids.length < 4) return false;
-  if (bids.length === 4 && bids.every((b) => b === "P")) return true;
-  return bids.slice(-3).every((b) => b === "P") && bids.slice(0, -3).some(substantive);
-}
-export function boardInfo(board) {
-  const dealers = ["N", "E", "S", "W"];
-  return { dealer: dealers[(board - 1) % 4], vul: VUL_CYCLE[(board - 1) % 16] };
-}
-function explain(system, sequence, bid) {
-  if (bid === "P") return "PASS：当前没有更合适的叫品。";
-  if (bid === "X") return "DOUBLE：对方最后一个实质叫品后，表示防守性加倍。";
-  if (bid === "XX") return "REDOUBLE：己方叫品被加倍后进行再加倍。";
-  if (sequence.split("_").length === 1) {
-    const level = Number(bid[0]);
-    if (bid.endsWith("N")) return `${SYSTEMS[system]}：${formatBid(bid)}，均衡牌型的开叫候选，约 ${level === 1 ? "15–17" : "强牌"} 点。`;
-    return `${SYSTEMS[system]}：${formatBid(bid)}，自然花色开叫候选，通常表示至少四张该花色。`;
-  }
-  return `${SYSTEMS[system]}：${formatBid(bid)} 是序列 “${sequence.replaceAll("_", " ")}” 后的合法延续。请结合牌力、牌型与局况判断。`;
-}
-const json = (body, status = 200) => new Response(JSON.stringify(body), {
-  status,
-  headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-});
+import { runRefreshBurst, datasetStatus } from './dataset/refresh.js';
+
+const SUITS = ['C','D','H','S','N'];
+const SYSTEMS = { JQA:'新睿精确', CBB:'新睿二盖一', NBS:'简易二盖一', ASY:'黄卡' };
+const VUL_CYCLE = ['None','NS','EW','All','NS','EW','All','None','EW','All','None','NS','All','None','NS','EW'];
 const CALL = /^(?:P|X|XX|[1-7](?:C|D|H|S|N))$/;
-const SYSTEM = new Set(Object.keys(SYSTEMS));
-const DEALER = new Set(["N", "E", "S", "W"]);
-const VUL = new Set(["None", "NS", "EW", "All"]);
-async function ensureDatasetState(env) { if (env?.DB) { try { await env.DB.prepare("INSERT OR IGNORE INTO dataset_state (id) VALUES (1)").run(); } catch {} } }
-function validExplainInput(value) {
-  if (!value || typeof value !== "object") return false;
-  if (typeof value.sequence !== "string" || value.sequence.length < 1 || value.sequence.length > 1024) return false;
-  const calls = value.sequence.toUpperCase().split("_");
-  return calls.every((call) => CALL.test(call)) && SYSTEM.has(value.system) &&
-    DEALER.has(value.dealer) && VUL.has(value.vul) && (value.teammode === 0 || value.teammode === 1);
+export function boardInfo(board) { return { dealer:['N','E','S','W'][(board-1)%4], vul:VUL_CYCLE[(board-1)%16] }; }
+const json = (body, status=200, extra={}) => new Response(JSON.stringify(body), { status, headers:{ 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store', ...extra } });
+
+async function ensureDatasetState(env) {
+  if (!env?.DB?.prepare) return;
+  await env.DB.prepare('INSERT OR IGNORE INTO dataset_state (id,lease_token,next_step_not_before) VALUES (1,0,0)').run();
 }
-async function handleExplain(request, env) {
-  let input;
-  try { input = await request.json(); } catch { return json({ status: "invalid", message: "请求格式不正确。" }, 400); }
-  if (!validExplainInput(input)) return json({ status: "invalid", message: "叫牌序列或设置不正确。" }, 400);
-  if (!env?.XINRUI_SESSION_ID || !env?.XINRUI_UID || !env?.XINRUI_VERSION) {
-    return json({ status: "unavailable", message: "说明服务暂时不可用，请稍后重试。" }, 503);
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
+function validInput(value) {
+  if (!value || typeof value !== 'object' || !Object.hasOwn(SYSTEMS, value.system) || !['N','E','S','W'].includes(value.dealer) || !['None','NS','EW','All'].includes(value.vul) || ![0,1].includes(value.teammode)) return false;
+  return typeof value.sequence === 'string' && value.sequence.length > 0 && value.sequence.length <= 1024 && value.sequence.toUpperCase().split('_').every((x)=>CALL.test(x));
+}
+async function activeGeneration(db) { try { return (await db.prepare('SELECT active_generation_id FROM dataset_state WHERE id=1').first())?.active_generation_id || null; } catch { return null; } }
+async function queryRules(db, generation, system, sequences) {
+  if (!db || !generation || !sequences.length) return {};
+  const r = await db.prepare("SELECT sequence,explanation,is_alert FROM bidding_rules WHERE generation_id=?1 AND system=?2 AND has_explanation=1 AND sequence IN (SELECT value FROM json_each(?3))").bind(generation, system, JSON.stringify(sequences)).all();
+  return Object.fromEntries((r.results||[]).map((x)=>[x.sequence,{ status:'found', explanation:x.explanation, isAlert:!!x.is_alert, source:'dataset' }]));
+}
+async function upstreamExplain(input, env) {
+  if (!env?.XINRUI_SESSION_ID || !env?.XINRUI_UID || !env?.XINRUI_VERSION) return { status:'unavailable', message:'说明服务暂时不可用，请稍后重试。' };
+  const c = new AbortController(), timer = setTimeout(()=>c.abort(),8000);
   try {
-    const base = String(env.XINRUI_BASE_URL || "https://www.xinruibridge.com").replace(/\/$/, "");
-    const upstream = await fetch(`${base}/bidcomment`, {
-      method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8", "user-agent": "BridgeBiddingWeb/1.0" },
-      body: JSON.stringify({
-        bid: input.sequence.toUpperCase(),
-        bidsystem: `${input.system},${input.system}`,
-        dealer: input.dealer,
-        lang: 1,
-        sessionid: env.XINRUI_SESSION_ID,
-        teammode: input.teammode,
-        uid: Number(env.XINRUI_UID),
-        version: env.XINRUI_VERSION,
-        vul: input.vul,
-      }),
-      signal: controller.signal,
-    });
-    if (!upstream.ok) throw new Error("upstream status");
-    const data = await upstream.json();
-    if (data?.rcode === "0000" && typeof data.content === "string" && data.content.trim()) {
-      return json({ status: "found", explanation: data.content.trim(), isAlert: data.isalert === "Y", source: "upstream" });
-    }
-    return json({ status: "missing", message: "暂无该叫牌序列的说明。" }, 404);
-  } catch {
-    return json({ status: "unavailable", message: "说明服务暂时不可用，请稍后重试。" }, 503);
-  } finally { clearTimeout(timer); }
+    const base=String(env.XINRUI_BASE_URL||'https://www.xinruibridge.com').replace(/\/$/,'');
+    const r=await fetch(`${base}/bidcomment`,{method:'POST',headers:{'content-type':'application/json; charset=utf-8','user-agent':'BridgeBiddingWeb/1.0'},body:JSON.stringify({bid:input.sequence.toUpperCase(),bidsystem:`${input.system},${input.system}`,dealer:input.dealer,lang:1,sessionid:env.XINRUI_SESSION_ID,teammode:input.teammode,uid:Number(env.XINRUI_UID),version:env.XINRUI_VERSION,vul:input.vul}),signal:c.signal});
+    if(!r.ok) throw new Error('upstream'); const data=await r.json();
+    if(data?.rcode==='0000'&&typeof data.content==='string'&&data.content.trim()) return {status:'found',explanation:data.content.trim(),isAlert:data.isalert==='Y',source:'upstream'};
+    return {status:'missing',message:'暂无该叫牌序列的说明。'};
+  } catch { return {status:'unavailable',message:'说明服务暂时不可用，请稍后重试。'}; } finally { clearTimeout(timer); }
 }
-async function handleExplanations(request, env) {
-  let input; try { input = await request.json(); } catch { return json({ status: "invalid", message: "请求格式不正确。" }, 400); }
-  if (!input || !Array.isArray(input.sequences) || input.sequences.length < 1 || input.sequences.length > 40 || new Set(input.sequences).size !== input.sequences.length || !input.sequences.every((s) => typeof s === "string" && s.length <= 1024 && s.split("_").every((c) => CALL.test(c)))) return json({ status: "invalid", message: "叫牌序列不正确。" }, 400);
-  const found = {};
-  if (env?.DB) {
-    try {
-      const state = await env.DB.prepare("SELECT active_generation_id FROM dataset_state WHERE id=1").first();
-      if (state?.active_generation_id) {
-        const rows = await env.DB.prepare("SELECT sequence, explanation, is_alert FROM bidding_rules WHERE generation_id=?1 AND system=?2 AND sequence IN (SELECT value FROM json_each(?3))").bind(state.active_generation_id, input.system, JSON.stringify(input.sequences)).all();
-        for (const r of rows.results || []) found[r.sequence] = { status: "found", explanation: r.explanation, isAlert: !!r.is_alert, source: "dataset" };
-      }
-    } catch { /* fall through */ }
-  }
-  const missing = input.sequences.filter((s) => !found[s]);
-  if (missing.length && env?.XINRUI_SESSION_ID) {
-    const results = await Promise.all(missing.slice(0, 4).map(async (sequence) => {
-      const r = await handleExplain(new Request(request.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...input, sequence }) }), env);
-      return [sequence, await r.json()];
-    })); for (const [s, v] of results) found[s] = v;
-  }
-  return json({ status: "ok", results: Object.fromEntries(input.sequences.map((s) => [s, found[s] || { status: "missing", message: "暂无该叫牌序列的说明。" }])) });
+async function explainOne(input, env) {
+  const sequence=input.sequence.toUpperCase(), generation=env?.DB?await activeGeneration(env.DB):null;
+  const hit=generation?(await queryRules(env.DB,generation,input.system,[sequence]))[sequence]:null;
+  return hit||upstreamExplain({...input,sequence},env);
 }
-function html() {
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>桥牌叫牌助手</title><style>
-  :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17221b;background:#f4f7f2}*{box-sizing:border-box}body{margin:0}header{padding:28px max(20px,calc((100% - 1180px)/2));background:#173b2c;color:#f5fbf2;display:flex;justify-content:space-between;align-items:center}header h1{margin:0;font-size:28px}header p{margin:6px 0 0;color:#c8e2cc}.shell{max-width:1180px;margin:24px auto;padding:0 20px}.toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.toolbar label{font-size:13px;color:#55705c}.toolbar select,.toolbar button{border:1px solid #c3d4c4;border-radius:10px;background:white;padding:10px 12px;font:inherit}.toolbar button{cursor:pointer}.toolbar .primary{background:#1b6a43;color:white;border-color:#1b6a43}.layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:18px;margin-top:18px}.card{background:white;border:1px solid #dce7dc;border-radius:18px;box-shadow:0 8px 24px #173b2c0b;padding:18px}.meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.meta strong{font-size:18px}.sequence{min-height:118px;background:#f7faf6;border-radius:12px;padding:12px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.seat{text-align:center;color:#2f7c43;font-weight:700}.seat.vul{color:#bd3838}.bid{min-height:44px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:#f0f5ef;font-weight:650;border:1px solid #e1eae0}.bid.click{cursor:pointer}.bid.click:hover{background:#e2f1e5}.board{display:grid;grid-template-columns:40px repeat(5,1fr);gap:7px;margin-top:16px}.level{display:grid;place-items:center;color:#698071;font-weight:700}.bidbtn{cursor:pointer;border:1px solid #d1dfd1;background:#fff;border-radius:10px;padding:11px 5px;font-size:16px}.bidbtn:disabled{opacity:.3;cursor:not-allowed}.bidbtn.red{color:#c03939}.special{display:grid;grid-template-columns:2fr 1fr 1fr;gap:7px;margin-top:10px}.special button{padding:12px;border-radius:10px;border:1px solid #d1dfd1;background:#fff;cursor:pointer}.special button:disabled{opacity:.3;cursor:not-allowed}.history{display:flex;gap:7px;flex-wrap:wrap;margin-top:13px}.history button{border:0;border-radius:8px;background:#e8f2e8;padding:7px 9px;cursor:pointer}.explain{min-height:116px;line-height:1.65;color:#3a5140}.next{display:grid;gap:9px;max-height:560px;overflow:auto}.next button{text-align:left;border:1px solid #dce7dc;background:#fbfdfb;border-radius:12px;padding:11px;cursor:pointer}.next strong{display:inline-block;min-width:65px;color:#175d3c}.next small{color:#58705d}.warning{color:#a25c1c;background:#fff5e8;padding:10px;border-radius:10px}.done{color:#1b6a43;background:#e8f5ea;padding:10px;border-radius:10px}@media(max-width:800px){.layout{grid-template-columns:1fr}.next{max-height:none}}
-  </style></head><body><header><h1>桥牌叫牌助手</h1></header><main class="shell"><div class="toolbar"><label>体系<select id="system"></select></label><label>副数<input id="board" type="number" min="1" value="1" style="width:76px;padding:9px;border:1px solid #c3d4c4;border-radius:10px"></label><button id="prev">上一副</button><button id="nextBoard">下一副</button><button id="undo">撤销</button><button id="clear">清空</button><button class="primary" id="copy">复制叫牌序列</button></div><div class="layout"><section class="card"><div class="meta"><strong id="boardMeta"></strong><span id="status"></span></div><div id="sequence" class="sequence"></div><div id="boardGrid" class="board"></div><div id="special" class="special"></div></section><aside class="card"><h2 style="margin-top:0">下一步建议</h2><div id="nextList" class="next"></div><hr style="border:0;border-top:1px solid #e6eee5;margin:18px 0"><h2>叫品说明</h2><div id="explain" class="explain">点击叫牌历史或建议查看说明。</div></aside></div></main><script>
-  const systems=${JSON.stringify(SYSTEMS)}, suits=${JSON.stringify(SUITS)}, symbols=${JSON.stringify(suitSymbol)}, vulCycle=${JSON.stringify(VUL_CYCLE)};let bids=[],system="CBB",board=1,lastExplanation="";
-  const $=id=>document.getElementById(id), fmt=b=>b==='P'?'PASS':(b==='X'||b==='XX'?b:b[0]+(symbols[b.slice(1)]||b.slice(1))); const isSub=b=>b&&!['P','X','XX'].includes(b);
-  const higher=(a,b)=>!b||+a[0]>+b[0]||(+a[0]===+b[0]&&suits.indexOf(a.slice(1))>suits.indexOf(b.slice(1))); const last=()=>[...bids].reverse().find(isSub);
-  function legal(){const l=last(),o=[];for(let n=1;n<8;n++)for(const s of suits){const b=n+s;if(higher(b,l))o.push(b)}o.push('P');const i=l?bids.lastIndexOf(l):-1,after=bids.slice(i+1);if(l&&(bids.length-i)%2===1&&!after.some(x=>x==='X'||x==='XX'))o.push('X');if(l&&(bids.length-i)%2===0&&after.includes('X')&&!after.includes('XX'))o.push('XX');return o}
-  const info=n=>({dealer:['N','E','S','W'][(n-1)%4],vul:vulCycle[(n-1)%16]}); const finished=()=>bids.length>=4&&((bids.length===4&&bids.every(x=>x==='P'))||(bids.slice(-3).every(x=>x==='P')&&bids.slice(0,-3).some(isSub)));
-  function explain(b,idx=bids.length){const seq=bids.slice(0,idx).join('_');if(b==='P')return 'PASS：当前没有更合适的叫品。';if(b==='X')return 'DOUBLE：对方最后一个实质叫品后，表示防守性加倍。';if(b==='XX')return 'REDOUBLE：己方叫品被加倍后进行再加倍。';if(idx===1)return systems[system]+'：'+fmt(b)+'，点击查看真实规则说明。';return systems[system]+'：'+fmt(b)+' 是序列 “'+seq.replaceAll('_',' ')+'” 后的合法延续，点击查看真实规则说明。'}
-  async function loadExplain(sequence){const i=info(board);$('explain').textContent='正在查询真实规则…';try{const r=await fetch('/api/explain',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sequence,system,dealer:i.dealer,vul:i.vul,teammode:0})});const data=await r.json();$('explain').innerHTML=data.status==='found'?(data.explanation+(data.isAlert?' <strong aria-label="ALERT">🅰︎</strong>':'')):(data.message||'暂无说明');}catch{$('explain').textContent='说明服务暂时不可用，请稍后重试。'}}
-  async function prefetch(seqs){if(!seqs.length)return {};const i=info(board);try{const r=await fetch('/api/explanations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sequences:seqs,system,dealer:i.dealer,vul:i.vul,teammode:0})});const data=await r.json();return data.results||{};}catch{return {}}}
-  function render(){const i=info(board),l=legal();$('boardMeta').textContent='第 '+board+' 副 · '+i.dealer+' 发 · 局况 '+i.vul;$('status').innerHTML=finished()?'<span class="done">叫牌结束</span>':'';const seq=$('sequence');seq.innerHTML=['N','E','S','W'].map((s,k)=>'<div class="seat '+((i.vul==='All'||i.vul.includes(s==='N'||s==='S'?'NS':'EW'))?'vul':'')+'">'+s+'</div>').join('');const pad=['N','E','S','W'].indexOf(i.dealer);for(let x=0;x<pad;x++)seq.innerHTML+='<div></div>';bids.forEach((b,k)=>seq.innerHTML+='<div class="bid click" data-i="'+k+'">'+fmt(b)+'</div>');while(seq.children.length%4)seq.innerHTML+='<div></div>';seq.querySelectorAll('[data-i]').forEach(e=>e.onclick=()=>loadExplain(bids.slice(0,+e.dataset.i+1).join('_')));let grid='<div></div>'+suits.map(s=>'<div class="level">'+(symbols[s]||s)+'</div>').join('');for(let n=1;n<8;n++){grid+='<div class="level">'+n+'</div>';for(const s of suits){const b=n+s;grid+='<button class="bidbtn '+(s==='H'||s==='D'?'red':'')+'" data-bid="'+b+'" '+(l.includes(b)?'':'disabled')+'>'+fmt(b)+'</button>'}}$('boardGrid').innerHTML=grid;$('special').innerHTML=['P','X','XX'].map(b=>'<button data-bid="'+b+'" '+(l.includes(b)?'':'disabled')+'>'+fmt(b)+'</button>').join('');document.querySelectorAll('[data-bid]').forEach(e=>e.onclick=()=>add(e.dataset.bid));$('nextList').innerHTML=l.slice(0,40).map(b=>'<button data-next="'+b+'"><strong>'+fmt(b)+'</strong><small>'+explain(b,bids.length+1)+'</small></button>').join('');document.querySelectorAll('[data-next]').forEach(e=>e.onclick=()=>{const b=e.dataset.next;loadExplain((bids.length?bids.join('_')+'_':'')+b)});$('board').value=board}
-  function add(b){if(!legal().includes(b))return;bids.push(b);render();loadExplain(bids.join('_'))}$('system').innerHTML=Object.entries(systems).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');$('system').value=system;$('system').onchange=e=>{system=e.target.value;bids=[];render()};$('undo').onclick=()=>{bids.pop();render()};$('clear').onclick=()=>{bids=[];render()};$('prev').onclick=()=>{board=Math.max(1,board-1);bids=[];render()};$('nextBoard').onclick=()=>{board++;bids=[];render()};$('board').onchange=e=>{board=Math.max(1,+e.target.value||1);bids=[];render()};$('copy').onclick=async()=>{await navigator.clipboard?.writeText(bids.join('_'));$('copy').textContent='已复制';setTimeout(()=>$('copy').textContent='复制叫牌序列',1200)};render();
-  </script></body></html>`;
+async function handleExplain(request,env) {
+  let input; try{input=await request.json();}catch{return json({status:'invalid',message:'请求格式不正确。'},400);}
+  if(!validInput(input)) return json({status:'invalid',message:'叫牌序列或设置不正确。'},400);
+  const result=await explainOne(input,env); return json(result,result.status==='missing'?404:result.status==='unavailable'?503:200);
 }
-export default { async fetch(request, env, ctx) { await ensureDatasetState(env); const url = new URL(request.url); if (url.pathname === "/api/explain" && request.method === "POST") return handleExplain(request, env); if (url.pathname === "/api/explanations" && request.method === "POST") return handleExplanations(request, env); if (url.pathname !== "/" && url.pathname !== "/index.html") return new Response("Not found", { status: 404 }); return new Response(html(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }); } };
+async function handleExplanations(request,env) {
+  let input; try{input=await request.json();}catch{return json({status:'invalid',message:'请求格式不正确。'},400);}
+  if(!input||!Array.isArray(input.sequences)||input.sequences.length<1||input.sequences.length>40||!input.sequences.every((s)=>validInput({...input,sequence:s}))) return json({status:'invalid',message:'叫牌序列不正确。'},400);
+  const sequences=[...new Set(input.sequences.map((s)=>s.toUpperCase()))],generation=env?.DB?await activeGeneration(env.DB):null;
+  const results=generation?await queryRules(env.DB,generation,input.system,sequences):{};
+  const missing=sequences.filter((s)=>!results[s]);
+  for(let i=0;i<missing.length;i+=4) await Promise.all(missing.slice(i,i+4).map(async(sequence)=>{results[sequence]=await upstreamExplain({...input,sequence},env);}));
+  return json({status:'ok',results:Object.fromEntries(sequences.map((s)=>[s,results[s]]))});
+}
+
+function page(){return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>桥牌叫牌助手</title><style>
+:root{font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:#17221b;background:#f4f7f2}*{box-sizing:border-box}body{margin:0}header{padding:25px max(20px,calc((100% - 1180px)/2));background:#173b2c;color:#fff}header h1{margin:0;font-size:28px}.shell{max-width:1180px;margin:24px auto;padding:0 20px}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:end}.toolbar label{font-size:13px;color:#55705c;display:grid;gap:4px}.toolbar select,.toolbar input,.toolbar button{border:1px solid #c3d4c4;border-radius:10px;background:white;padding:10px 12px;font:inherit}.toolbar button{cursor:pointer}.toolbar .primary{background:#1b6a43;color:white}.layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(310px,.75fr);gap:18px;margin-top:18px}.card{background:#fff;border:1px solid #dce7dc;border-radius:18px;box-shadow:0 8px 24px #173b2c0b;padding:18px}.meta{display:flex;justify-content:space-between;margin-bottom:14px}.sequence{min-height:118px;background:#f7faf6;border-radius:12px;padding:12px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.seat{text-align:center;color:#2f7c43;font-weight:700}.seat.vul{color:#bd3838}.bid{min-height:44px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:#f0f5ef;border:1px solid #e1eae0}.bid.click{cursor:pointer}.board{display:grid;grid-template-columns:40px repeat(5,1fr);gap:7px;margin-top:16px}.level{display:grid;place-items:center;color:#698071;font-weight:700}.bidbtn,.special button{cursor:pointer;border:1px solid #d1dfd1;background:#fff;border-radius:10px;padding:11px 5px;font-size:16px}.bidbtn:disabled,.special button:disabled{opacity:.3}.bidbtn.red{color:#c03939}.special{display:grid;grid-template-columns:2fr 1fr 1fr;gap:7px;margin-top:10px}.next{display:grid;gap:9px;max-height:560px;overflow:auto}.next button{text-align:left;border:1px solid #dce7dc;background:#fbfdfb;border-radius:12px;padding:11px;cursor:pointer}.next button:disabled{opacity:.55}.next strong{display:inline-block;min-width:65px;color:#175d3c}.next small{color:#58705d;line-height:1.45}.explain{min-height:116px;line-height:1.65}.alert-badge{margin-left:5px}.done{color:#1b6a43}.dataset{font-size:12px;color:#698071}footer{max-width:1180px;margin:18px auto 30px;text-align:center;color:#6b7b70}@media(max-width:800px){.layout{grid-template-columns:1fr}.next{max-height:none}}
+</style></head><body><header><h1>桥牌叫牌助手</h1></header><main class="shell"><div class="toolbar"><label>体系<select id="system"></select></label><label>副数<input id="board" type="number" min="1" value="1" style="width:76px"></label><button id="prev">上一副</button><button id="nextBoard">下一副</button><button id="undo">撤销</button><button id="clear">清空</button><button class="primary" id="copy">复制叫牌序列</button><span id="dataset" class="dataset"></span></div><div class="layout"><section class="card"><div class="meta"><strong id="boardMeta"></strong><span id="status"></span></div><div id="sequence" class="sequence"></div><div id="boardGrid" class="board"></div><div id="special" class="special"></div></section><aside class="card"><h2 style="margin-top:0">下一步建议</h2><div id="nextList" class="next"></div><hr style="border:0;border-top:1px solid #e6eee5;margin:18px 0"><h2>叫品说明</h2><div id="explain" class="explain">点击叫牌历史查看说明。</div></aside></div></main><footer>北京析构整环桥牌俱乐部出品</footer><template id="alertTemplate"><strong class="alert-badge" aria-label="ALERT">🅰︎</strong></template><script>
+const systems=${JSON.stringify(SYSTEMS)},suits=${JSON.stringify(SUITS)},symbols={C:'♣',D:'♦',H:'♥',S:'♠',N:'NT'},vulCycle=${JSON.stringify(VUL_CYCLE)};let bids=[],system='CBB',board=1,renderId=0,controller;
+const $=id=>document.getElementById(id),fmt=b=>b==='P'?'PASS':(b==='X'||b==='XX'?b:b[0]+symbols[b.slice(1)]),isSub=b=>b&&!['P','X','XX'].includes(b);const higher=(a,b)=>!b||+a[0]>+b[0]||(+a[0]===+b[0]&&suits.indexOf(a.slice(1))>suits.indexOf(b.slice(1)));const last=()=>[...bids].reverse().find(isSub);
+function legal(){const l=last(),o=[];for(let n=1;n<8;n++)for(const s of suits){const b=n+s;if(higher(b,l))o.push(b)}o.push('P');const i=l?bids.lastIndexOf(l):-1,a=bids.slice(i+1);if(l&&(bids.length-i)%2===1&&!a.some(x=>x==='X'||x==='XX'))o.push('X');if(l&&(bids.length-i)%2===0&&a.includes('X')&&!a.includes('XX'))o.push('XX');return o}const info=()=>({dealer:['N','E','S','W'][(board-1)%4],vul:vulCycle[(board-1)%16]});const finished=()=>bids.length>=4&&((bids.length===4&&bids.every(x=>x==='P'))||(bids.slice(-3).every(x=>x==='P')&&bids.slice(0,-3).some(isSub)));
+function show(target,data){target.textContent=data?.explanation||data?.message||'暂无说明';if(data?.isAlert)target.append(document.getElementById('alertTemplate').content.cloneNode(true))}
+async function loadExplain(sequence){const i=info();$('explain').textContent='正在查询真实规则…';try{const r=await fetch('/api/explain',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sequence,system,dealer:i.dealer,vul:i.vul,teammode:0})});show($('explain'),await r.json())}catch{$('explain').textContent='说明服务暂时不可用，请稍后重试。'}}
+async function prefetch(items,id){controller?.abort();controller=new AbortController();const i=info();try{const r=await fetch('/api/explanations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sequences:items.map(x=>x.sequence),system,dealer:i.dealer,vul:i.vul,teammode:0}),signal:controller.signal});const data=await r.json();if(id!==renderId)return;document.querySelectorAll('[data-next]').forEach((e,k)=>show(e.querySelector('small'),data.results?.[items[k].sequence]))}catch(e){if(e.name!=='AbortError'&&id===renderId)document.querySelectorAll('[data-next] small').forEach(e=>e.textContent='说明暂时不可用')}}
+function render(){const id=++renderId,i=info(),l=finished()?[]:legal(),seq=$('sequence');$('boardMeta').textContent='第 '+board+' 副 · '+i.dealer+' 发 · 局况 '+i.vul;$('status').textContent=finished()?'叫牌结束':'';seq.innerHTML=['N','E','S','W'].map(s=>'<div class="seat '+((i.vul==='All'||i.vul.includes((s==='N'||s==='S')?'NS':'EW'))?'vul':'')+'">'+s+'</div>').join('');for(let x=0;x<['N','E','S','W'].indexOf(i.dealer);x++)seq.innerHTML+='<div></div>';bids.forEach((b,k)=>seq.innerHTML+='<div class="bid click" data-i="'+k+'">'+fmt(b)+'</div>');while(seq.children.length%4)seq.innerHTML+='<div></div>';seq.querySelectorAll('[data-i]').forEach(e=>e.onclick=()=>loadExplain(bids.slice(0,+e.dataset.i+1).join('_')));let grid='<div></div>'+suits.map(s=>'<div class="level">'+symbols[s]+'</div>').join('');for(let n=1;n<8;n++){grid+='<div class="level">'+n+'</div>';for(const s of suits){const b=n+s;grid+='<button class="bidbtn '+(['H','D'].includes(s)?'red':'')+'" data-bid="'+b+'" '+(l.includes(b)?'':'disabled')+'>'+fmt(b)+'</button>'}}$('boardGrid').innerHTML=grid;$('special').innerHTML=['P','X','XX'].map(b=>'<button data-bid="'+b+'" '+(l.includes(b)?'':'disabled')+'>'+fmt(b)+'</button>').join('');document.querySelectorAll('[data-bid]').forEach(e=>e.onclick=()=>add(e.dataset.bid));const items=l.slice(0,40).map(b=>({bid:b,sequence:(bids.length?bids.join('_')+'_':'')+b}));$('nextList').innerHTML=items.map(x=>'<button data-next="'+x.bid+'"><strong>'+fmt(x.bid)+'</strong><small>正在查询真实说明…</small></button>').join('');document.querySelectorAll('[data-next]').forEach(e=>e.onclick=()=>add(e.dataset.next));if(items.length)prefetch(items,id);$('board').value=board}
+function add(b){if(!legal().includes(b)||finished())return;document.querySelectorAll('[data-next]').forEach(e=>e.disabled=true);controller?.abort();bids.push(b);render();loadExplain(bids.join('_'))}
+$('system').innerHTML=Object.entries(systems).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');$('system').value=system;$('system').onchange=e=>{system=e.target.value;bids=[];render()};$('undo').onclick=()=>{bids.pop();render()};$('clear').onclick=()=>{bids=[];render()};$('prev').onclick=()=>{board=Math.max(1,board-1);bids=[];render()};$('nextBoard').onclick=()=>{board++;bids=[];render()};$('board').onchange=e=>{board=Math.max(1,+e.target.value||1);bids=[];render()};$('copy').onclick=async()=>{await navigator.clipboard?.writeText(bids.join('_'))};async function poll(){try{const d=await(await fetch('/api/dataset-status')).json();$('dataset').textContent=d.dataAvailable?(d.status==='refreshing'?'规则库正在更新':'规则库已就绪'):'规则库初始化中';setTimeout(poll,(d.nextPollSeconds||3)*1000)}catch{setTimeout(poll,5000)}}render();poll();
+</script></body></html>`}
+
+export default { async fetch(request,env,ctx={}) {
+  await ensureDatasetState(env); if(env?.DB&&env?.STAGING&&ctx?.waitUntil) ctx.waitUntil(runRefreshBurst(env));
+  const url=new URL(request.url);
+  if(url.pathname==='/api/explain'&&request.method==='POST') return handleExplain(request,env);
+  if(url.pathname==='/api/explanations'&&request.method==='POST') return handleExplanations(request,env);
+  if(url.pathname==='/api/dataset-status'&&request.method==='GET') return json(await datasetStatus(env));
+  if(url.pathname!=='/'&&url.pathname!=='/index.html') return new Response('Not found',{status:404});
+  return new Response(page(),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
+} };

@@ -1,0 +1,26 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import worker from '../worker/index.js';
+
+function dbWithRule() {
+  return { prepare(sql) { return {
+    bind() { return this; },
+    async run() { return { meta: { changes: 1 } }; },
+    async first() { return sql.includes('active_generation_id') ? { active_generation_id: 'g1' } : null; },
+    async all() { return sql.includes('bidding_rules') ? { results: [{ sequence: '1C', explanation: '真实数据库说明', is_alert: 1 }] } : { results: [] }; },
+  }; } };
+}
+
+test('batch explanation uses the active D1 generation without upstream fetch', async () => {
+  const originalFetch = globalThis.fetch;
+  let upstreamCalls = 0;
+  globalThis.fetch = async () => { upstreamCalls++; throw new Error('must not call upstream'); };
+  try {
+    const request = new Request('https://site.test/api/explanations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sequences: ['1C'], system: 'CBB', dealer: 'N', vul: 'None', teammode: 0 }) });
+    const response = await worker.fetch(request, { DB: dbWithRule() }, { waitUntil() {} });
+    const body = await response.json();
+    assert.equal(body.results['1C'].explanation, '真实数据库说明');
+    assert.equal(body.results['1C'].source, 'dataset');
+    assert.equal(upstreamCalls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});

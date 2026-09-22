@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
+import { pathToFileURL } from "node:url";
 const root = resolve(process.argv[2] || "");
 if (!process.argv[2]) throw new Error("Artifact path is required");
-const source = await readFile(join(root, "server/index.js"), "utf8");
 const manifest = await readFile(join(root, ".openai/hosting.json"), "utf8");
 JSON.parse(manifest);
-const mod = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const mod = await import(`${pathToFileURL(join(root, "server/index.js")).href}?v=${Date.now()}`);
 assert.equal(typeof mod.default?.fetch, "function");
 assert.match(manifest, /"d1"\s*:\s*"DB"/);
 assert.match(manifest, /"r2"\s*:\s*"STAGING"/);
