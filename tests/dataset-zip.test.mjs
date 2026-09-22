@@ -13,4 +13,7 @@ function zipMany(entries) {
 test('reads a bounded UTF-8 system txt from a zip', async()=>{ const txt=await readSystemTxt(zipMany([['CBB.txt','1C#CBB#自然开叫\n']]),'CBB'); assert.equal(txt,'1C#CBB#自然开叫\n'); });
 test('ignores safe archive metadata while extracting the named system file', async()=>{ const txt=await readSystemTxt(zipMany([['README.txt','metadata'],['CBB.txt','1C#CBB#自然开叫\n']]),'CBB'); assert.match(txt,/自然开叫/); });
 test('extracts the real vendor filename when it contains the system code', async()=>{ const txt=await readSystemTxt(zipMany([['bidproductCN-cbb-260721.txt','1C#CBB#自然开叫\n']]),'CBB'); assert.match(txt,/自然开叫/); });
+for (const [system,filename] of [['JQA','bidproductJQA-260721.txt'],['CBB','bidproductCN-cbb-260721.txt'],['NBS','bidproductNBS-260721.txt'],['ASY','bidproduct_ASY.txt']]) {
+  test(`extracts the official ${system} archive filename`, async()=>{ const txt=await readSystemTxt(zipMany([[filename,`1C#${system}#自然开叫\n`]]),system); assert.match(txt,/自然开叫/); });
+}
 test('rejects an archive without the system file', async()=>{ await assert.rejects(()=>readSystemTxt(zipMany([['evil.txt','x']]),'CBB')); });

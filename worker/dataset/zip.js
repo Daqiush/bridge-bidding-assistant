@@ -7,7 +7,9 @@ function isSystemTxt(name, system) {
   const base = name.split("/").at(-1);
   if (!base?.toLowerCase().endsWith(".txt")) return false;
   const stem = base.slice(0, -4).toLowerCase();
-  return stem.split(/[^a-z0-9]+/).includes(system.toLowerCase());
+  const code = system.toLowerCase();
+  if (stem.split(/[^a-z0-9]+/).includes(code)) return true;
+  return new RegExp(`^bidproduct(?:cn[-_])?[-_]?${code}(?:[-_].*)?$`).test(stem);
 }
 async function inflate(raw) {
   const ds = new DecompressionStream("deflate-raw");
