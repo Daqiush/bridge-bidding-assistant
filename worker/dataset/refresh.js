@@ -10,6 +10,9 @@ export function nextImportAction(imports) {
   const next = imports.find((x) => x.stage !== 'complete');
   return next ? { type: 'import', system: next.system, stage: next.stage } : { type: 'activate' };
 }
+export function nextImportWindow(start, totalLines) {
+  return { start, end: Math.min(totalLines, start + 2000) };
+}
 async function getAll(stmt) { const r = await stmt.all(); return r.results || []; }
 async function putJson(bucket, key, value) { await bucket.put(key, JSON.stringify(value), { httpMetadata: { contentType: 'application/json' } }); }
 async function readText(object) { return typeof object.text === 'function' ? object.text() : new TextDecoder().decode(await object.arrayBuffer()); }
@@ -31,14 +34,15 @@ async function createGeneration(env, now) {
 }
 async function importChunk(env, generation, row) {
   const object = await env.STAGING.get(row.txt_key); if (!object) throw new Error('txt_missing');
-  const txt = await readText(object), lines = txt.replace(/^\uFEFF/, '').split(/\r?\n/), size = 350;
-  const records = parseDatasetText(txt, row.system, row.line_no, size);
+  const txt = await readText(object), lines = txt.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const window = nextImportWindow(row.line_no, lines.length);
+  const records = parseDatasetText(txt, row.system, window.start, window.end - window.start);
   if (records.length) {
     const sql = `INSERT OR IGNORE INTO bidding_rules (generation_id,system,sequence,explanation,has_explanation,is_alert,source_order)
       SELECT ?1,json_extract(value,'$.system'),json_extract(value,'$.sequence'),json_extract(value,'$.explanation'),json_extract(value,'$.hasExplanation'),json_extract(value,'$.isAlert'),json_extract(value,'$.sourceOrder') FROM json_each(?2)`;
     await env.DB.prepare(sql).bind(generation, JSON.stringify(records)).run();
   }
-  const nextLine = Math.min(lines.length, row.line_no + size), done = nextLine >= lines.length;
+  const nextLine = window.end, done = nextLine >= lines.length;
   await env.DB.prepare(`UPDATE dataset_imports SET line_no=?3, valid_count=valid_count+?4, stage=?5 WHERE generation_id=?1 AND system=?2`).bind(generation, row.system, nextLine, records.length, done ? 'validate_system' : 'import_chunks').run();
 }
 async function processImport(env, generation, row) {
