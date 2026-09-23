@@ -36,3 +36,11 @@ test('page uses the requested concise Chinese status labels', async () => {
   assert.doesNotMatch(html, /副数/);
   assert.doesNotMatch(html, /正在查询真实解释说明…/);
 });
+
+test('opponent auto-pass can append a pass without changing single-call undo', async () => {
+  const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
+  const html = await response.text();
+  assert.match(html, /id="autoPass"/);
+  assert.match(html, /if\(\$\('autoPass'\)\.checked&&b!=='P'\)bids\.push\('P'\)/);
+  assert.match(html, /\$\('undo'\)\.onclick=\(\)=>\{bids\.pop\(\);render\(\)\}/);
+});
