@@ -79,3 +79,10 @@ test('next-step alert badges are blue', async () => {
   const html = await response.text();
   assert.match(html, /\.next \.alert-badge\{color:#1677ff\}/);
 });
+
+test('desktop next-step list is shortened while mobile remains unbounded', async () => {
+  const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
+  const html = await response.text();
+  assert.match(html, /\.next\{display:grid;gap:9px;max-height:430px/);
+  assert.match(html, /@media\(max-width:800px\)\{\.layout\{grid-template-columns:1fr\}\.next\{max-height:none\}\}/);
+});
