@@ -69,3 +69,9 @@ test('copy reports success and clipboard import restores calls', async () => {
   assert.match(html, /navigator\.clipboard\.readText\(\)/);
   assert.match(html, /bids=parsed/);
 });
+
+test('next-step alert badges are blue', async () => {
+  const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
+  const html = await response.text();
+  assert.match(html, /\.next \.alert-badge\{color:#1677ff\}/);
+});
