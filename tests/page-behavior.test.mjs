@@ -27,3 +27,12 @@ test('page renders the required attribution and accessible alert badge', async (
   assert.match(html, /<footer>北京析构整环桥牌俱乐部出品<\/footer>/);
   assert.match(html, /<strong class="alert-badge" aria-label="ALERT">🅰︎<\/strong>/);
 });
+
+test('page uses the requested concise Chinese status labels', async () => {
+  const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
+  const html = await response.text();
+  assert.match(html, /副号/);
+  assert.match(html, /正在查询…/);
+  assert.doesNotMatch(html, /副数/);
+  assert.doesNotMatch(html, /正在查询真实解释说明…/);
+});
