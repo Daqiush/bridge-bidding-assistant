@@ -56,6 +56,9 @@ test('calls use suit colors, display order, and a wrapped sequence trace', async
   assert.match(html, /row\.slice\(1\)\.reverse\(\),row\[0\]/);
   assert.match(html, /trace\.id='sequenceTrace'/);
   assert.match(html, /bids\.slice\(i,i\+4\)/);
+  assert.match(html, /grid-template-columns:repeat\(5,minmax\(0,1fr\)\) 40px/);
+  assert.match(html, /suit-N\{color:#e7a6df !important\}/);
+  assert.match(html, /#nextList strong/);
 });
 
 test('copy reports success and clipboard import restores calls', async () => {
