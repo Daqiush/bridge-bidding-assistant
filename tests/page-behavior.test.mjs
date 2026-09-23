@@ -57,6 +57,9 @@ test('calls use suit colors, display order, and a wrapped sequence trace', async
   assert.match(html, /trace\.id='sequenceTrace'/);
   assert.match(html, /bids\.slice\(i,i\+4\)/);
   assert.match(html, /groups\.join\(String\.fromCharCode\(10\)\)/);
+  assert.match(html, /join\(String\.fromCharCode\(9\)\)/);
+  assert.match(html, /activeSequence/);
+  assert.match(html, /loadExplain=async sequence/);
   assert.match(html, /grid-template-columns:repeat\(5,minmax\(0,1fr\)\) 40px/);
   assert.match(html, /suit-N\{color:#e7a6df !important\}/);
   assert.match(html, /#nextList strong/);
