@@ -16,7 +16,9 @@ test('prefetched explanations are reused for suggestion and history clicks', asy
   assert.match(html, /const explanationCache=new Map\(\)/);
   assert.match(html, /function rememberExplanation\(/);
   assert.match(html, /const cached=explanationCache\.get\(/);
-  assert.match(html, /rememberExplanation\(context,items\[k\]\.sequence,result\)/);
+  assert.match(html, /data\.results\?\.\[item\.sequence\]/);
+  assert.match(html, /for\(const sequence of data\.pending\|\|\[\]\)/);
+  assert.match(html, /rememberExplanation\(context,sequence,result\)/);
 });
 
 test('page renders the required attribution and accessible alert badge', async () => {
