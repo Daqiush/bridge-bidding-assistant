@@ -94,7 +94,9 @@ function add(b){if(!legal().includes(b)||finished())return;document.querySelecto
 $('system').innerHTML=Object.entries(systems).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');$('system').value=system;$('system').onchange=e=>{system=e.target.value;bids=[];render()};$('undo').onclick=()=>{bids.pop();render()};$('clear').onclick=()=>{bids=[];render()};$('prev').onclick=()=>{board=Math.max(1,board-1);bids=[];render()};$('nextBoard').onclick=()=>{board++;bids=[];render()};$('board').onchange=e=>{board=Math.max(1,+e.target.value||1);bids=[];render()};$('copy').onclick=async()=>{await navigator.clipboard?.writeText(bids.join('_'))};async function poll(){try{const d=await(await fetch('/api/dataset-status')).json();$('dataset').textContent=d.dataAvailable?(d.status==='refreshing'?'规则库正在更新':'规则库已就绪'):'规则库初始化中';setTimeout(poll,(d.nextPollSeconds||3)*1000)}catch{setTimeout(poll,5000)}}render();poll();
 </script></body></html>`}
 
-export default { async fetch(request,env,ctx={}) {
+export default { async scheduled(_event, env, ctx) {
+  ctx.waitUntil(runRefreshBurst(env));
+}, async fetch(request,env,ctx={}) {
   await ensureDatasetState(env); if(env?.DB&&env?.STAGING&&ctx?.waitUntil) ctx.waitUntil(runRefreshBurst(env));
   const url=new URL(request.url);
   if(url.pathname==='/api/explain'&&request.method==='POST') return handleExplain(request,env);

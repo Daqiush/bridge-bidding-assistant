@@ -1,0 +1,16 @@
+name = "bridge-bidding-assistant"
+main = "worker/index.js"
+compatibility_date = "2025-03-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "catmeowbid-rules"
+database_id = "1979983b-a277-4b6c-8ab5-265f29c48408"
+
+[[r2_buckets]]
+binding = "STAGING"
+bucket_name = "catmeowbid-staging"
+
+[triggers]
+crons = ["*/5 * * * *"]
