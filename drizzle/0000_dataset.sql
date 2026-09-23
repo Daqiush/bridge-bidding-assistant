@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS dataset_state (
   active_generation_id TEXT,
   previous_generation_id TEXT,
   last_success_at INTEGER,
+  last_checked_at INTEGER,
   retry_after INTEGER,
   lease_owner TEXT,
   lease_until INTEGER,
