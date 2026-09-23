@@ -44,3 +44,25 @@ test('opponent auto-pass can append a pass without changing single-call undo', a
   assert.match(html, /if\(\$\('autoPass'\)\.checked&&b!=='P'\)bids\.push\('P'\)/);
   assert.match(html, /\$\('undo'\)\.onclick=\(\)=>\{bids\.pop\(\);render\(\)\}/);
 });
+
+test('calls use suit colors, display order, and a wrapped sequence trace', async () => {
+  const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
+  const html = await response.text();
+  assert.match(html, /suit-C/);
+  assert.match(html, /suit-D/);
+  assert.match(html, /suit-H/);
+  assert.match(html, /suit-S/);
+  assert.match(html, /displaySuits=\['N','S','H','D','C'\]/);
+  assert.match(html, /row\.slice\(1\)\.reverse\(\),row\[0\]/);
+  assert.match(html, /trace\.id='sequenceTrace'/);
+  assert.match(html, /bids\.slice\(i,i\+4\)/);
+});
+
+test('copy reports success and clipboard import restores calls', async () => {
+  const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
+  const html = await response.text();
+  assert.match(html, /读取叫牌序列/);
+  assert.match(html, /已复制/);
+  assert.match(html, /navigator\.clipboard\.readText\(\)/);
+  assert.match(html, /bids=parsed/);
+});
