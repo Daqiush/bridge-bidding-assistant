@@ -25,6 +25,21 @@ test('batch explanation uses the active D1 generation without upstream fetch', a
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('batch explanation uses a completed system from an initializing generation', async () => {
+  const calls = [];
+  const DB = { prepare(sql) { return {
+    bind(...values) { calls.push({ sql, values }); return this; },
+    async run() { return { meta: { changes: 1 } }; },
+    async first() { return sql.includes('dataset_imports') ? { generation_id: 'g-cbb-ready' } : null; },
+    async all() { return sql.includes('bidding_rules') ? { results: [{ sequence: '1C', explanation: '已独立启用', is_alert: 0 }] } : { results: [] }; },
+  }; } };
+  const request = new Request('https://site.test/api/explanations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sequences: ['1C'], system: 'CBB', dealer: 'N', vul: 'None', teammode: 0 }) });
+  const response = await worker.fetch(request, { DB }, { waitUntil() {} });
+  const body = await response.json();
+  assert.equal(body.results['1C'].explanation, '已独立启用');
+  assert.ok(calls.some((call) => call.sql.includes('bidding_rules') && call.values[0] === 'g-cbb-ready'));
+});
+
 test('batch explanation returns cached results immediately and leaves unresolved calls pending', async () => {
   const DB = { prepare(sql) { return {
     bind(...values) { this.values = values; return this; },

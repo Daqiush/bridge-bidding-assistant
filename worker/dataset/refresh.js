@@ -152,5 +152,13 @@ export async function datasetStatus(env) {
   if (!env?.DB) return { status: 'unavailable', dataAvailable: false, nextPollSeconds: 10, lastUpdatedAt: null };
   const state = await env.DB.prepare('SELECT active_generation_id,last_success_at,retry_after FROM dataset_state WHERE id=1').first();
   const staging = await env.DB.prepare("SELECT generation_id FROM dataset_generations WHERE status='staging' LIMIT 1").first();
-  return { status: staging ? (state?.active_generation_id ? 'refreshing' : 'initializing') : 'idle', dataAvailable: !!state?.active_generation_id, nextPollSeconds: staging ? 2 : 30, lastUpdatedAt: state?.last_success_at ? new Date(state.last_success_at).toISOString() : null };
+  let available = null;
+  try {
+    available = await env.DB.prepare(`SELECT 1
+      FROM dataset_imports imports
+      JOIN dataset_generations generations ON generations.generation_id=imports.generation_id
+      WHERE imports.stage='complete' AND generations.status IN ('staging','active') LIMIT 1`).first();
+  } catch { /* A legacy database without import metadata has no partial availability. */ }
+  const dataAvailable = !!available || !!state?.active_generation_id;
+  return { status: staging ? (dataAvailable ? 'refreshing' : 'initializing') : 'idle', dataAvailable, nextPollSeconds: staging ? 2 : 30, lastUpdatedAt: state?.last_success_at ? new Date(state.last_success_at).toISOString() : null };
 }

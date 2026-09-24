@@ -17,6 +17,18 @@ function validInput(value) {
   return typeof value.sequence === 'string' && value.sequence.length > 0 && value.sequence.length <= 1024 && value.sequence.toUpperCase().split('_').every((x)=>CALL.test(x));
 }
 async function activeGeneration(db) { try { return (await db.prepare('SELECT active_generation_id FROM dataset_state WHERE id=1').first())?.active_generation_id || null; } catch { return null; } }
+async function availableSystemGeneration(db, system) {
+  if (!db || !system) return null;
+  try {
+    const row = await db.prepare(`SELECT imports.generation_id
+      FROM dataset_imports imports
+      JOIN dataset_generations generations ON generations.generation_id=imports.generation_id
+      WHERE imports.system=?1 AND imports.stage='complete' AND generations.status IN ('staging','active')
+      ORDER BY generations.created_at DESC LIMIT 1`).bind(system).first();
+    if (row?.generation_id) return row.generation_id;
+  } catch { /* Fall back to the active generation for an older database. */ }
+  return activeGeneration(db);
+}
 async function queryRules(db, generation, system, sequences) {
   if (!db || !generation || !sequences.length) return {};
   const r = await db.prepare("SELECT sequence,explanation,is_alert FROM bidding_rules WHERE generation_id=?1 AND system=?2 AND has_explanation=1 AND sequence IN (SELECT value FROM json_each(?3))").bind(generation, system, JSON.stringify(sequences)).all();
@@ -53,7 +65,7 @@ async function upstreamExplain(input, env) {
   } catch { return {status:'unavailable',message:'说明服务暂时不可用，请稍后重试。'}; } finally { clearTimeout(timer); }
 }
 async function explainOne(input, env) {
-  const sequence=input.sequence.toUpperCase(), generation=env?.DB?await activeGeneration(env.DB):null;
+  const sequence=input.sequence.toUpperCase(), generation=env?.DB?await availableSystemGeneration(env.DB,input.system):null;
   const hit=generation?(await queryRules(env.DB,generation,input.system,[sequence]))[sequence]:null;
   if(hit)return hit;
   const cached=(await queryExplanationCache(env?.DB,env,input,[sequence]))[sequence];
@@ -70,7 +82,7 @@ async function handleExplain(request,env) {
 async function handleExplanations(request,env) {
   let input; try{input=await request.json();}catch{return json({status:'invalid',message:'请求格式不正确。'},400);}
   if(!input||!Array.isArray(input.sequences)||input.sequences.length<1||input.sequences.length>40||!input.sequences.every((s)=>validInput({...input,sequence:s}))) return json({status:'invalid',message:'叫牌序列不正确。'},400);
-  const sequences=[...new Set(input.sequences.map((s)=>s.toUpperCase()))],generation=env?.DB?await activeGeneration(env.DB):null;
+  const sequences=[...new Set(input.sequences.map((s)=>s.toUpperCase()))],generation=env?.DB?await availableSystemGeneration(env.DB,input.system):null;
   const results=generation?await queryRules(env.DB,generation,input.system,sequences):{};
   Object.assign(results,await queryExplanationCache(env?.DB,env,input,sequences.filter((s)=>!results[s])));
   const missing=sequences.filter((s)=>!results[s]);
