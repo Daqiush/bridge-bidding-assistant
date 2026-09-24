@@ -86,3 +86,11 @@ test('desktop next-step list is shortened while mobile remains unbounded', async
   assert.match(html, /\.next\{display:grid;gap:9px;max-height:365px/);
   assert.match(html, /@media\(max-width:800px\)\{\.layout\{grid-template-columns:1fr\}\.next\{max-height:none\}\}/);
 });
+
+test('restores and persists the selected bidding system in browser storage', async () => {
+  const response = await worker.fetch(new Request('https://site.test/'), {}, { waitUntil() {} });
+  const html = await response.text();
+  assert.match(html, /const storedSystem=localStorage\.getItem\('bridge-bidding-system'\)/);
+  assert.match(html, /if\(storedSystem&&Object\.hasOwn\(systems,storedSystem\)\)system=storedSystem/);
+  assert.match(html, /localStorage\.setItem\('bridge-bidding-system',system\)/);
+});
